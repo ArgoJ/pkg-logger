@@ -11,7 +11,7 @@ pip install .
 ## Usage
 
 ```python
-from pgk_logger.pkg_logger import PackageLogger, get_package_logger
+from pkg_logger import PackageLogger, get_package_logger
 
 PackageLogger.setup("my_package", short_name="mp")
 logger = get_package_logger("my_package.module")
