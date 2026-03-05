@@ -69,9 +69,8 @@ class PackageLogger:
         **tqdm_kwargs: Any,
     ) -> Iterator[tqdm_module.tqdm]:
         """Context manager to safely wrap a loop with tqdm-aware logging."""
-        target_logger = logger
-        if not logger.handlers and logger.propagate and logger.parent:
-            raise ValueError("Logger has no handlers and propagates to parent. Please configure the logger with handlers or set propagate=False.")
+
+        target_logger = PackageLogger._resolve_tqdm_target_logger(logger)
 
         tqdm_handler, restored_handlers = PackageLogger._swap_to_tqdm_handler(target_logger)
         tqdm_stream = None
@@ -133,6 +132,22 @@ class PackageLogger:
         logger_instance.removeHandler(handler_to_remove)
         for h in handlers_to_restore:
             logger_instance.addHandler(h)
+
+    @staticmethod
+    def _resolve_tqdm_target_logger(logger: logging.Logger) -> logging.Logger:
+        """Find nearest logger in hierarchy that actually owns handlers."""
+        current = logger
+        while current is not None:
+            if current.handlers:
+                return current
+            if not current.propagate:
+                break
+            current = current.parent
+
+        raise ValueError(
+            "No configured handlers found in logger hierarchy. "
+            "Call PackageLogger.setup(...) on your package logger first."
+        )
 
     @staticmethod
     def setup(
