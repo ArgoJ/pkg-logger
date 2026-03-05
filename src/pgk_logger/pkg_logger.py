@@ -114,11 +114,14 @@ class PackageLogger:
                 removed_handlers.append(h)
 
         handler = TqdmLoggingHandler()
-        formatter = ShortNameFormatter(
-            DEFAULT_LOGGER_FORMAT,
-            module_name=logger_instance.name,
-            short_name=short_name,
-        )
+        if short_name:
+            formatter = ShortNameFormatter(
+                DEFAULT_LOGGER_FORMAT,
+                module_name=logger_instance.name,
+                short_name=short_name,
+            )
+        else:
+            formatter = logging.Formatter(DEFAULT_LOGGER_FORMAT)
         handler.setFormatter(formatter)
         logger_instance.addHandler(handler)
 
@@ -150,11 +153,14 @@ class PackageLogger:
 
         handler = logging.StreamHandler(sys.stdout)
         handler.setLevel(level)
-        formatter = ShortNameFormatter(
-            DEFAULT_LOGGER_FORMAT,
-            module_name=package_name,
-            short_name=short_name,
-        )
+        if short_name:
+            formatter = ShortNameFormatter(
+                DEFAULT_LOGGER_FORMAT,
+                module_name=package_name,
+                short_name=short_name,
+            )
+        else:
+            formatter = logging.Formatter(DEFAULT_LOGGER_FORMAT)
         handler.setFormatter(formatter)
         logger.addHandler(handler)
 
