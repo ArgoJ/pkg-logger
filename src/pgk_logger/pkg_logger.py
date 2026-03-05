@@ -63,13 +63,12 @@ class PackageLogger:
     @contextmanager
     def tqdm(
         logger: logging.Logger,
+        suppress_native_output: bool = False,
+        suppress_native_stderr: bool = False,
         *tqdm_args: Any,
         **tqdm_kwargs: Any,
     ) -> Iterator[tqdm_module.tqdm]:
         """Context manager to safely wrap a loop with tqdm-aware logging."""
-        suppress_native_output = bool(tqdm_kwargs.pop("suppress_native_output", False))
-        suppress_native_stderr = bool(tqdm_kwargs.pop("suppress_native_stderr", False))
-
         target_logger = logger
         if not logger.handlers and logger.propagate and logger.parent:
             raise ValueError("Logger has no handlers and propagates to parent. Please configure the logger with handlers or set propagate=False.")
@@ -223,10 +222,38 @@ class PackageBoundLogger(logging.LoggerAdapter):
     @contextmanager
     def tqdm(
         self,
+        suppress_native_output: bool = False,
+        suppress_native_stderr: bool = False,
         *tqdm_args: Any,
         **tqdm_kwargs: Any,
     ) -> Iterator[tqdm_module.tqdm]:
-        with PackageLogger.tqdm(self.logger, *tqdm_args, **tqdm_kwargs) as pbar:
+        """tqdm context manager that also handles logging redirection.
+
+        Parameters
+        ----------
+        suppress_native_output : bool, optional
+            If True, suppresses all native output (C/C++ stdout) during the tqdm context. Default is False.
+        suppress_native_stderr : bool, optional
+            If True, suppresses all native error output (C/C++ stderr) during the tqdm context. Default is False.
+        *tqdm_args : tuple[Any, ...]
+            Positional arguments for tqdm.
+        **tqdm_kwargs : dict[str, Any]
+            Keyword arguments for tqdm
+
+        Yields
+        ------
+        Iterator[tqdm_module.tqdm]: 
+            A tqdm progress bar instance that can be used within the context. 
+            All native output and logging will be suppressed according to the specified flags, 
+            ensuring that the progress bar display remains clean and uncorrupted by other outputs.
+        """
+        with PackageLogger.tqdm(
+            self.logger, 
+            *tqdm_args, 
+            suppress_native_output=suppress_native_output, 
+            suppress_native_stderr=suppress_native_stderr, 
+            **tqdm_kwargs
+        ) as pbar:
             yield pbar
 
 
