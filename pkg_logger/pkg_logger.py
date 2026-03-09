@@ -63,9 +63,9 @@ class PackageLogger:
     @contextmanager
     def tqdm(
         logger: logging.Logger,
+        *tqdm_args: Any,
         suppress_native_output: bool = False,
         suppress_native_stderr: bool = False,
-        *tqdm_args: Any,
         **tqdm_kwargs: Any,
     ) -> Iterator[tqdm_module.tqdm]:
         """Context manager to safely wrap a loop with tqdm-aware logging."""
@@ -243,21 +243,21 @@ class PackageBoundLogger(logging.LoggerAdapter):
     @contextmanager
     def tqdm(
         self,
+        *tqdm_args: Any,
         suppress_native_output: bool = False,
         suppress_native_stderr: bool = False,
-        *tqdm_args: Any,
         **tqdm_kwargs: Any,
     ) -> Iterator[tqdm_module.tqdm]:
         """tqdm context manager that also handles logging redirection.
 
         Parameters
         ----------
+        *tqdm_args : tuple[Any, ...]
+            Positional arguments for tqdm.
         suppress_native_output : bool, optional
             If True, suppresses all native output (C/C++ stdout) during the tqdm context. Default is False.
         suppress_native_stderr : bool, optional
             If True, suppresses all native error output (C/C++ stderr) during the tqdm context. Default is False.
-        *tqdm_args : tuple[Any, ...]
-            Positional arguments for tqdm.
         **tqdm_kwargs : dict[str, Any]
             Keyword arguments for tqdm
 
