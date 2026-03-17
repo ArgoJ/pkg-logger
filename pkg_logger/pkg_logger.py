@@ -10,6 +10,105 @@ from contextlib import contextmanager, nullcontext, redirect_stdout, redirect_st
 DEFAULT_LOGGER_FORMAT = '[%(msecs)s] [%(name)s] [%(levelname)s] - %(message)s'
 
 
+class _TqdmWriteStream:
+    """File-like adapter that forwards writes through tqdm.write."""
+
+    def __init__(self, file_obj):
+        self._file_obj = file_obj
+        self._buffer = ""
+
+    def write(self, text: str) -> int:
+        if not text:
+            return 0
+
+        self._buffer += text
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            if line:
+                tqdm.write(line, file=self._file_obj)
+
+        return len(text)
+
+    def flush(self) -> None:
+        if self._buffer:
+            tqdm.write(self._buffer, file=self._file_obj)
+            self._buffer = ""
+
+
+@contextmanager
+def suppress_native_output(
+    suppress_stdout: bool = True,
+    suppress_stderr: bool = False,
+    suppress_logging: bool = False,
+    redirect_python_stdout: bool | None = None,
+    redirect_python_stderr: bool | None = None,
+    stdout_target: Any | None = None,
+    stderr_target: Any | None = None,
+) -> Iterator[None]:
+    """Temporarily suppress native writes, Python streams, and logging.
+
+    This completely silences C/C++ extensions, Python print/tqdm, 
+    and standard Python loggers.
+    """
+    if redirect_python_stdout is None:
+        # Only forward Python stdout when an explicit target is provided.
+        redirect_python_stdout = stdout_target is not None
+    if redirect_python_stderr is None:
+        # Only forward Python stderr when an explicit target is provided.
+        redirect_python_stderr = stderr_target is not None
+
+    # Logging-Level deactivate
+    if suppress_logging:
+        root_logger = logging.getLogger()
+        old_log_level = root_logger.getEffectiveLevel()
+        root_logger.setLevel(logging.CRITICAL)
+
+    # OS-Level (C/C++ File Descriptors)
+    devnull_fd = os.open(os.devnull, os.O_WRONLY)
+    saved_fds: dict[int, int] = {}
+
+    # Python-Level (sys.stdout / sys.stderr)
+    devnull_file = open(os.devnull, 'w')
+
+    try:
+        # OS-Level redirection
+        if suppress_stdout:
+            sys.stdout.flush()
+            saved_fds[1] = os.dup(1)
+            os.dup2(devnull_fd, 1)
+
+        if suppress_stderr:
+            sys.stderr.flush()
+            saved_fds[2] = os.dup(2)
+            os.dup2(devnull_fd, 2)
+
+        # Python-Level redirection
+        stdout_cm = (
+            redirect_stdout(stdout_target if stdout_target is not None else devnull_file)
+            if redirect_python_stdout
+            else nullcontext()
+        )
+        stderr_cm = (
+            redirect_stderr(stderr_target if stderr_target is not None else devnull_file)
+            if redirect_python_stderr
+            else nullcontext()
+        )
+        with stdout_cm, stderr_cm:
+            yield
+
+    finally:
+        for target_fd, saved_fd in saved_fds.items():
+            os.dup2(saved_fd, target_fd)
+            os.close(saved_fd)
+
+        os.close(devnull_fd)
+        devnull_file.close()
+        if suppress_logging:
+            root_logger.setLevel(old_log_level)
+
+
+_suppress_native_output_cm = suppress_native_output
+
 class ShortNameFormatter(logging.Formatter):
     """
     Formatter that replaces the long package name with a short one 
@@ -74,28 +173,34 @@ class PackageLogger:
 
         tqdm_handler, restored_handlers = PackageLogger._swap_to_tqdm_handler(target_logger)
         tqdm_stream = None
+        visible_stdout_stream = os.fdopen(os.dup(1), "w", buffering=1)
+        visible_stderr_stream = os.fdopen(os.dup(2), "w", buffering=1)
         if suppress_native_stderr and "file" not in tqdm_kwargs:
             tqdm_stream = os.fdopen(os.dup(2), "w", buffering=1)
             tqdm_kwargs["file"] = tqdm_stream
 
         pbar = tqdm(*tqdm_args, **tqdm_kwargs)
-        output_redirect = (
-            PackageLogger.suppress_native_output(
-                suppress_stdout=suppress_native_output,
-                suppress_stderr=suppress_native_stderr,
-                suppress_logging=False,
-            )
-            if (suppress_native_output or suppress_native_stderr)
-            else nullcontext(None)
+        tqdm_stdout_stream = _TqdmWriteStream(visible_stdout_stream)
+        tqdm_stderr_stream = _TqdmWriteStream(visible_stderr_stream)
+        output_redirect = _suppress_native_output_cm(
+            suppress_stdout=suppress_native_output,
+            suppress_stderr=suppress_native_stderr,
+            suppress_logging=False,
+            stdout_target=tqdm_stdout_stream,
+            stderr_target=tqdm_stderr_stream,
         )
 
         try:
             with output_redirect:
                 yield pbar
         finally:
+            tqdm_stdout_stream.flush()
+            tqdm_stderr_stream.flush()
             pbar.close()
             if tqdm_stream is not None:
                 tqdm_stream.close()
+            visible_stdout_stream.close()
+            visible_stderr_stream.close()
             if tqdm_handler:
                 PackageLogger._restore_handlers(target_logger, tqdm_handler, restored_handlers)
 
@@ -180,58 +285,6 @@ class PackageLogger:
         logger.addHandler(handler)
 
         return logger
-    
-    @staticmethod
-    @contextmanager
-    def suppress_native_output(
-        suppress_stdout: bool = True,
-        suppress_stderr: bool = False,
-        suppress_logging: bool = False,
-    ) -> Iterator[None]:
-        """Temporarily suppress native writes, Python streams, and logging.
-
-        This completely silences C/C++ extensions, Python print/tqdm, 
-        and standard Python loggers.
-        """
-        # Logging-Level deactivate
-        if suppress_logging:
-            root_logger = logging.getLogger()
-            old_log_level = root_logger.getEffectiveLevel()
-            root_logger.setLevel(logging.CRITICAL)
-
-        # OS-Level (C/C++ File Descriptors)
-        devnull_fd = os.open(os.devnull, os.O_WRONLY)
-        saved_fds: dict[int, int] = {}
-
-        # Python-Level (sys.stdout / sys.stderr)
-        devnull_file = open(os.devnull, 'w')
-
-        try:
-            # OS-Level redirection
-            if suppress_stdout:
-                sys.stdout.flush()
-                saved_fds[1] = os.dup(1)
-                os.dup2(devnull_fd, 1)
-
-            if suppress_stderr:
-                sys.stderr.flush()
-                saved_fds[2] = os.dup(2)
-                os.dup2(devnull_fd, 2)
-
-            # Python-Level redirection
-            with redirect_stdout(devnull_file if suppress_stdout else sys.stdout), \
-                 redirect_stderr(devnull_file if suppress_stderr else sys.stderr):
-                yield
-
-        finally:
-            for target_fd, saved_fd in saved_fds.items():
-                os.dup2(saved_fd, target_fd)
-                os.close(saved_fd)
-
-            os.close(devnull_fd)
-            devnull_file.close()
-            if suppress_logging:
-                root_logger.setLevel(old_log_level)
 
 
 class PackageBoundLogger(logging.LoggerAdapter):
