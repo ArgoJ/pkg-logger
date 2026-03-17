@@ -1,6 +1,8 @@
 import logging
 import sys
 import os
+import ctypes
+import ctypes.util
 import tqdm as tqdm_module
 
 from typing import Any, Iterator
@@ -8,6 +10,37 @@ from tqdm import tqdm
 from contextlib import contextmanager, nullcontext, redirect_stdout, redirect_stderr
 
 DEFAULT_LOGGER_FORMAT = '[%(msecs)s] [%(name)s] [%(levelname)s] - %(message)s'
+
+
+def _load_libc() -> Any | None:
+    """Load libc to access fflush(NULL) for native stdio flushing."""
+    libc_name = ctypes.util.find_library("c")
+    if not libc_name:
+        return None
+
+    try:
+        libc = ctypes.CDLL(libc_name)
+    except OSError:
+        return None
+
+    libc.fflush.argtypes = [ctypes.c_void_p]
+    libc.fflush.restype = ctypes.c_int
+    return libc
+
+
+_LIBC = _load_libc()
+
+
+def _flush_c_stdio() -> None:
+    """Flush C stdio buffers so native writes don't leak across FD swaps."""
+    if _LIBC is None:
+        return
+
+    try:
+        _LIBC.fflush(None)
+    except Exception:
+        # Best effort only; suppression still works for Python-level streams.
+        pass
 
 
 class _TqdmWriteStream:
@@ -51,11 +84,11 @@ def suppress_native_output(
     and standard Python loggers.
     """
     if redirect_python_stdout is None:
-        # Only forward Python stdout when an explicit target is provided.
-        redirect_python_stdout = stdout_target is not None
+        # Redirect when suppression is requested, or when an explicit target is provided.
+        redirect_python_stdout = suppress_stdout or (stdout_target is not None)
     if redirect_python_stderr is None:
-        # Only forward Python stderr when an explicit target is provided.
-        redirect_python_stderr = stderr_target is not None
+        # Redirect when suppression is requested, or when an explicit target is provided.
+        redirect_python_stderr = suppress_stderr or (stderr_target is not None)
 
     # Logging-Level deactivate
     if suppress_logging:
@@ -73,11 +106,13 @@ def suppress_native_output(
     try:
         # OS-Level redirection
         if suppress_stdout:
+            _flush_c_stdio()
             sys.stdout.flush()
             saved_fds[1] = os.dup(1)
             os.dup2(devnull_fd, 1)
 
         if suppress_stderr:
+            _flush_c_stdio()
             sys.stderr.flush()
             saved_fds[2] = os.dup(2)
             os.dup2(devnull_fd, 2)
@@ -97,6 +132,8 @@ def suppress_native_output(
             yield
 
     finally:
+        # Flush native buffers while still redirected to avoid delayed terminal writes.
+        _flush_c_stdio()
         for target_fd, saved_fd in saved_fds.items():
             os.dup2(saved_fd, target_fd)
             os.close(saved_fd)
@@ -186,6 +223,8 @@ class PackageLogger:
             suppress_stdout=suppress_native_output,
             suppress_stderr=suppress_native_stderr,
             suppress_logging=False,
+            redirect_python_stdout=True,
+            redirect_python_stderr=True,
             stdout_target=tqdm_stdout_stream,
             stderr_target=tqdm_stderr_stream,
         )
