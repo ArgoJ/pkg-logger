@@ -180,13 +180,14 @@ class TqdmLoggingHandler(logging.Handler):
     """
     A logging handler that writes logs via tqdm.write, so they don't corrupt the progress bar.
     """
-    def __init__(self, level=logging.NOTSET):
+    def __init__(self, level=logging.NOTSET, stream=None):
         super().__init__(level)
+        self._stream = stream if stream is not None else sys.stderr
 
     def emit(self, record):
         try:
             msg = self.format(record)
-            tqdm.write(msg, file=sys.stdout) 
+            tqdm.write(msg, file=self._stream)
         except Exception:
             self.handleError(record)
 
@@ -207,14 +208,18 @@ class PackageLogger:
         """Context manager to safely wrap a loop with tqdm-aware logging."""
 
         target_logger = PackageLogger._resolve_tqdm_target_logger(logger)
-
-        tqdm_handler, restored_handlers = PackageLogger._swap_to_tqdm_handler(target_logger)
         tqdm_stream = None
         visible_stdout_stream = os.fdopen(os.dup(1), "w", buffering=1)
         visible_stderr_stream = os.fdopen(os.dup(2), "w", buffering=1)
         if suppress_native_stderr and "file" not in tqdm_kwargs:
             tqdm_stream = os.fdopen(os.dup(2), "w", buffering=1)
             tqdm_kwargs["file"] = tqdm_stream
+
+        progress_stream = tqdm_kwargs.get("file")
+        tqdm_handler, restored_handlers = PackageLogger._swap_to_tqdm_handler(
+            target_logger,
+            stream=progress_stream,
+        )
 
         pbar = tqdm(*tqdm_args, **tqdm_kwargs)
         tqdm_stdout_stream = _TqdmWriteStream(visible_stdout_stream)
@@ -244,7 +249,7 @@ class PackageLogger:
                 PackageLogger._restore_handlers(target_logger, tqdm_handler, restored_handlers)
 
     @staticmethod
-    def _swap_to_tqdm_handler(logger_instance: logging.Logger):
+    def _swap_to_tqdm_handler(logger_instance: logging.Logger, stream=None):
         """Internal helper to swap StreamHandlers with TqdmLoggingHandler."""
         removed_handlers = []
         short_name = None
@@ -256,7 +261,7 @@ class PackageLogger:
                 logger_instance.removeHandler(h)
                 removed_handlers.append(h)
 
-        handler = TqdmLoggingHandler()
+        handler = TqdmLoggingHandler(stream=stream)
         if short_name:
             formatter = ShortNameFormatter(
                 DEFAULT_LOGGER_FORMAT,
