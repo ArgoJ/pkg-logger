@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "Josua" }]
 dependencies = [
-  "tqdm>=4.60",
+  "rich"
 ]
 
 [tool.setuptools.packages.find]
